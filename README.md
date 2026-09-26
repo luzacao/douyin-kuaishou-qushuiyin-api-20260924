@@ -1,93 +1,54 @@
-# 小红书图集怎么去水印？用 image_list 把图文和实况图一次拿全
+早上好，今天聊点对接时会让人挠头的事：Key 怎么买、为什么会被限、错误码到底在说什么。先把门敲开——体验站是 [https://video.zacao.top](https://video.zacao.top)，访问密码 `zacao`，打开输进去就能贴链接试。
 
-想把小红书笔记里的图片和实况图批量取出来，别在页面里一张张右键了——直接把分享链接丢给接口，`image_list` 里就躺着你需要的一切。先打开 [https://video.zacao.top](https://video.zacao.top)，访问密码 `zacao`，首页不用带 Key 就能试着解析，每个 IP 每小时 30 次。
+**问：我就是想先看一眼效果，不注册行不行？**
 
-下面这段 Python 是完整可跑的，注释里也写了体验地址，复制走就能用起来：
+答：行。首页可以不背 Key 直接试用，每个 IP 每小时 30 次。你贴一条抖音或者快手的分享口令进去，接口会自己从文案里把链接抠出来，不用手动拆 `v.douyin.com` 那串短链。觉得顺手，再去 [https://video.zacao.top/buy](https://video.zacao.top/buy) 自助下单拿正式 Key。
 
-```python
-import requests
+**问：拿到 Key 之后往哪塞？**
 
-# 在线体验：https://video.zacao.top  访问密码：zacao
-# 完整接口文档：https://video.zacao.top/docs
-resp = requests.post(
-    "https://video.zacao.top/api/parse",
-    headers={"X-API-Key": "mp_xxxx"},   # 购买 Key：https://video.zacao.top/buy
-    json={"text": "https://www.xiaohongshu.com/explore/xxxxx"},
-    timeout=30,
-)
-data = resp.json()["data"]
-
-# image_list 元素可能是字符串，也可能是 {url, live_photo_url}
-for item in data.get("image_list", []):
-    if isinstance(item, str):
-        print("静态图:", item)
-    else:
-        print("静态图:", item.get("url"))
-        live = item.get("live_photo_url")
-        if live:
-            print("实况视频:", live)
-```
-
-习惯用 curl 的话，等价写法是这样：
+答：Base URL 是 `https://video.zacao.top`，解析接口是 `POST /api/parse`，Header 里带 `X-API-Key`。也支持 `Authorization: Bearer` 或者 body/query 里放 `api_key`，但推荐 Header，干净。文档在 [https://video.zacao.top/docs](https://video.zacao.top/docs)，字段含义写得比较细。
 
 ```bash
 curl -X POST 'https://video.zacao.top/api/parse' \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: mp_xxxx' \
-  -d '{"text":"小红书分享文案 https://www.xiaohongshu.com/explore/xxxxx"}'
+  -d '{"text":"https://v.kuaishou.com/xxxxx"}'
 ```
 
-**用 video.zacao.top 去水印，小红书图集、实况图、抖音视频一次解析清楚。**
+**问：用户跑着跑着说「429 了」，我该怎么跟他解释？**
 
-## 为什么 image_list 值得单独拿出来说
+答：先分清是匿名额度还是你的 Key 出问题。429 基本是匿名 IP 小时额度用尽，默认 30 次——这种情况引导用户去 [https://video.zacao.top/buy](https://video.zacao.top/buy) 拿 Key，换成带 `X-API-Key` 的请求就行。403 是 Key 无效、被禁用，或者内容本身不可访问；401 是服务端开了强制鉴权而你没带 Key。这几个别混着报，不然用户只会觉得「接口挂了」。
 
-视频类平台解析出来是一个 `video_url`，好办。图文笔记不一样：一条笔记可能九张图，里面还夹着实况图——实况图本质是一张静态封面配一段几秒的动态视频。很多工具只给你静态图，动态部分就丢了。
+**问：那 400、404、500 呢，要不要原样透给前端？**
 
-这个接口在 `image_list` 字段里把两者都保留下来：
+答：建议做一层翻译。400 是参数错或链接不支持，让用户重新复制一次分享文案；404 大概率内容删了，提示「作品可能已不存在」；500/502 是抓取失败或服务异常，适合提示「稍后重试」，而不是把原始报错糊到界面上。下面这张表可以直接抄进你的错误处理。
 
-| 元素形态 | 含义 |
-| --- | --- |
-| `"https://..."` | 纯静态图地址 |
-| `{ "url", "live_photo_url" }` | 带实况的图，`url` 是封面，`live_photo_url` 是动态视频 |
+| code | 含义 | 给用户的话术 |
+| --- | --- | --- |
+| 400 | 参数错误 / 链接不支持 | 请重新复制分享链接再试 |
+| 401 | 缺少 API Key | 服务配置问题，请联系客服 |
+| 403 | Key 无效 / 内容不可访问 | 内容暂时取不到，换个链接试试 |
+| 404 | 内容可能已删除 | 作品可能已删除 |
+| 429 | 匿名 IP 额度用尽 | 免费次数已用完，购买 Key 继续 |
+| 500/502 | 服务异常或抓取失败 | 稍后重试 |
 
-所以遍历时先判断类型，再决定取哪个字段。上面那段代码就是这么处理的。
+**问：限流这块，我自己要不要再加一层？**
 
-## 从分享文案到链接，接口自己抽
+答：要。接口侧有匿名限制，但你的业务侧最好按用户维度做队列和缓存。同一个 `video_id` 短时间重复请求，直接回缓存；`source_video_url` 有时效，别当永久地址存。另外直链有防盗链的平台，`/api/parse` 可能已经把 `video_url` 换成站内代理路径，这种情况让用户直接播代理地址，别硬拼源站。
 
-小红书分享出来的通常是一整段文案，里面混着标题、话题标签和一条短链。你不用自己写正则去抠——`text` 字段直接丢整段进去，接口会从文案里把链接抽出来。链接识别按域名自动分流，不需要传 `platform`，小红书、抖音、快手、豆包、即梦、视频号等 30+ 平台共用同一个入口。
+**问：你们到底能解析哪些平台？**
 
-请求统一走：
+答：抖音、快手、豆包、即梦、小红书、视频号、公众号、B 站、头条、西瓜、微博、微视、得物、TikTok 等 30+ 平台，按域名自动分流，调用方不用传 `platform`。探活可以打一下 `GET /api/health`，上线前先确认服务是通的。
 
-- Base URL：`https://video.zacao.top`
-- 解析接口：`POST /api/parse`
-- 鉴权 Header：`X-API-Key`
+**去水印这件事，在 video.zacao.top 上先试再买最省心**——不用先付款猜效果。
 
-响应是固定结构，`code`、`message`、`succ`、`data` 四件套，`data` 里除了 `image_list`，还有 `title`、`cover_url`、`author`、`video_id` 等字段，够你做二次分发了。
+---
 
-## 几个真正会踩的坑
+**现在就去试：**
 
-**直链有时效。** `source_video_url` 和 `image_list` 里的地址都不是永久链接，解析成功后尽快下载转存，别拿去当 CDN 地址缓存在数据库里。
-
-**实况图要成对保存。** 只存 `url` 会丢掉动态效果，只存 `live_photo_url` 又没了封面。两个都留着，或者在业务层自己决定用哪个。
-
-**分享链接要完整。** 小红书、快手的短链有时需要完整口令才能被正确识别。如果解析失败，让用户重新复制一次分享文案，比在代码里加十行容错更有效。
-
-**配额分两种。** 首页匿名体验是每个 IP 每小时 30 次，超了返回 `429`。正式对接请去 [购买页](https://video.zacao.top/buy) 拿 Key，三种传法任选：`X-API-Key` 头（推荐）、`Authorization: Bearer`、或 body / query 里的 `api_key`。Key 无效或禁用返回 `403`。
-
-## 文档比这篇短文全得多
-
-这里只覆盖了 `image_list` 一条线。`/api/parse/v2` 的兼容字段、`/api/detail` 的点赞评论收藏量、`/api/video/stream` 的防盗链代理、完整错误码表，都在接口文档里：[https://video.zacao.top/docs](https://video.zacao.top/docs)。
-
-源码和更新记录在 GitHub：[https://github.com/luzacao/video-parse-api](https://github.com/luzacao/video-parse-api)。
-
-最后提醒一句：接口只用于已获授权的素材提取、备份与学习，请遵守各平台用户协议与著作权法，别拿去做侵权搬运。
-
-## 现在就去试
-
-- 体验网址：[https://video.zacao.top](https://video.zacao.top)
-- 访问密码：`zacao`
+- 体验站：[https://video.zacao.top](https://video.zacao.top)，密码 `zacao`
 - 接口文档：[https://video.zacao.top/docs](https://video.zacao.top/docs)
 - 购买 Key：[https://video.zacao.top/buy](https://video.zacao.top/buy)
 - GitHub：[https://github.com/luzacao/video-parse-api](https://github.com/luzacao/video-parse-api)
 
-打开网址，输入密码 `zacao`，粘一条小红书分享文案进去，看看 `image_list` 长什么样。
+把 Key、限流、错误码三件事跟用户讲明白，对接就差不了。
